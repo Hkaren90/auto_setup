@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v3.4 (Final Authentication Fix: Focus on 'localhost')
+# DVWA Universal Auto Installer v3.5 (Final Authentication Fix: Clean ALTER USER)
 # --------------------------------------------------------------------------------------
-# This script performs a "Scorched Earth" installation, focusing the critical 
-# authentication plugin fix specifically on the 'localhost' user, which PHP often 
-# defaults to using via Unix socket, even when configured for 127.0.0.1.
+# This script performs a "Scorched Earth" installation, using the cleanest, most 
+# reliable ALTER USER syntax to force the 'mysql_native_password' plugin for 
+# the 'localhost' user, resolving the persistent Unix socket connection failure.
 #
 # USAGE: sudo bash dvwa_setup.sh
 # --------------------------------------------------------------------------------------
@@ -13,11 +13,11 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="3.4"
+INSTALLER_VERSION="3.5"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use
-DB_NAME="dvwa"
+DB_NAME="dvWA"
 DB_HOST="127.0.0.1" # Explicitly use 127.0.0.1 for consistent TCP connections
 # Include essential PHP extensions for compatibility
 REQUIRED_PACKAGES="apache2 mariadb-server php php-mysql php-gd php-xml php-curl php-zip php-mbstring libapache2-mod-php git unzip"
@@ -108,19 +108,25 @@ run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
 run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'$DB_HOST';"
 
 # 4. PLUGIN FIX (CRITICAL for "Access Denied" errors)
-#    We focus the fix on the 'localhost' user as this is where PHP is failing via socket.
-log "  -> Fixing Authentication Plugin for 'localhost' (Attempting methods for compatibility)..."
+#    We focus the fix on the 'localhost' user, using two different ALTER USER syntaxes
+log "  -> Fixing Authentication Plugin for 'localhost' (Attempting two ALTER USER methods)..."
 
-# Method 1 (Modern ALTER USER) - Focused on 'localhost'
-if echo "ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';" | sudo mysql -u root 2>/dev/null; then
-    log "     (Method 1 [ALTER USER] Success: Native password plugin set for localhost.)"
+# Method 1 (Modern ALTER USER - Plugin ONLY, cleaner)
+if echo "ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password;" | sudo mysql -u root 2>/dev/null; then
+    log "     (Method 1 [ALTER USER Plugin Only] Success: Plugin set for localhost.)"
 else
-    log "     (Method 1 failed. Trying Method 2 [SET PASSWORD] for 'localhost'...)"
-    # Method 2 (Legacy SET PASSWORD) - Focused on 'localhost'
-    if echo "SET PASSWORD FOR '$DB_USER'@'localhost' = PASSWORD('$DB_PASS');" | sudo mysql -u root 2>/dev/null; then
-        log "     (Method 2 [SET PASSWORD] Success: Password set for localhost.)"
+    log "     (Method 1 failed. Trying Method 2 [ALTER USER Plugin + Password]...)"
+    # Method 2 (Combined ALTER USER - Plugin and Password)
+    if echo "ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';" | sudo mysql -u root 2>/dev/null; then
+        log "     (Method 2 [ALTER USER Combined] Success: Plugin set for localhost.)"
     else
-         warn "     (Both plugin fix methods failed. Connection might still fail.)"
+        log "     (Method 2 failed. Trying Method 3 [Legacy SET PASSWORD]...)"
+        # Method 3 (Legacy SET PASSWORD - Doesn't explicitly fix plugin, but last resort)
+        if echo "SET PASSWORD FOR '$DB_USER'@'localhost' = PASSWORD('$DB_PASS');" | sudo mysql -u root 2>/dev/null; then
+            log "     (Method 3 [SET PASSWORD] Success: Password set for localhost.)"
+        else
+             warn "     (All plugin fix methods failed. Connection might still fail.)"
+        fi
     fi
 fi
 
@@ -158,7 +164,7 @@ fi
 sed -i "s/\$DVWA\['db_user'\] = '.*';/\$DVWA\['db_user'\] = '$DB_USER';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_password'\] = '.*';/\$DVWA\['db_password'\] = '$DB_PASS';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_database'\] = '.*';/\$DVWA\['db_database'\] = '$DB_NAME';/g" "$CONFIG_PATH"
-# FIX: Use 127.0.0.1 explicitly
+# FIX: Use 127.0.0.1 explicitly to force TCP/IP (though PHP may still use socket)
 sed -i "s/\$DVWA\['db_server'\] = '.*';/\$DVWA\['db_server'\] = '$DB_HOST';/g" "$CONFIG_PATH"
 
 # Disable reCAPTCHA keys
@@ -191,7 +197,7 @@ chmod -R 777 "$PHPIDS_TMP_DIR"
 log "Restarting Apache..."
 systemctl reload apache2 || true
 
-# 8. VERIFICATION (New Step)
+# 8. VERIFICATION 
 # --------------------------------------------------------------------------------------
 log "Verifying Database Connection..."
 # Test connection explicitly using 127.0.0.1
