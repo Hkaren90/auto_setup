@@ -1,10 +1,10 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v2.3 (FIXED: MariaDB Authentication Plugin for PHP)
+# DVWA Universal Auto Installer v2.5 (FINAL FIX: PHP Vulnerability Settings)
 # --------------------------------------------------------------------------------------
 # This script automatically installs or completely resets and reinstalls DVWA.
-# It handles existing installations, database users, permissions, and Git errors.
+# It ensures all necessary PHP modules, database users, and permissive settings are in place.
 # Compatibility: Designed for Debian/Ubuntu/Kali-based systems.
 #
 # USAGE: sudo bash dvwa_setup.sh
@@ -13,12 +13,13 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="2.3"
+INSTALLER_VERSION="2.5"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use (though not recommended for DVWA)
 DB_NAME="dvwa"
 # Note: Using generic PHP package names (e.g., php-mysql) as apt usually links to the active version.
+# Added php-curl, php-zip, php-mbstring for maximum compatibility across PHP versions.
 REQUIRED_PACKAGES="apache2 mariadb-server php php-mysql php-gd php-xml php-curl php-zip php-mbstring libapache2-mod-php git unzip"
 
 # --- UTILITY FUNCTIONS ---
@@ -32,11 +33,16 @@ fail_exit() {
 # Function to run MariaDB commands securely as root
 run_mysql() {
     # Attempt to connect to MariaDB as root using sudo.
-    # This is the most reliable way on Linux VMs/Kali where root password is often unset/known to OS.
     sudo mysql -u root -e "$1"
     if [ $? -ne 0 ]; then
         fail_exit "MariaDB command failed. Check if 'mariadb-server' is installed and running."
     fi
+}
+
+# Function to find the active PHP configuration file (php.ini)
+find_php_ini() {
+    # Finds the php.ini path used by the CLI (which usually matches the web environment for modules)
+    php -i 2>/dev/null | grep -E "^Configuration File (Path|Used)" | awk '{print $NF}' | head -n 1
 }
 
 # --- MAIN INSTALLATION STEPS ---
@@ -65,7 +71,7 @@ log "Handling DVWA directory: Checking for existing installation..."
 if [ -d "$DVWA_DIR/.git" ]; then
     log "Existing DVWA repository found. Resetting and pulling latest changes to update..."
     
-    # Fix Git dubious ownership issue (Handles #4) - Must be run before git operations
+    # Fix Git dubious ownership issue (Handles #4)
     git config --global --add safe.directory "$DVWA_DIR" 2>/dev/null || true
 
     # Use reset/pull to ensure a clean, up-to-date state
@@ -84,7 +90,7 @@ else
     git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
 fi
 
-# 4. MariaDB Cleanup and Setup (Handles #1, #2 and MySQLi Access Denied Fix)
+# 4. MariaDB Cleanup and Setup
 # --------------------------------------------------------------------------------------
 log "MariaDB Setup: Dropping old database and user, then creating fresh ones..."
 
@@ -96,39 +102,60 @@ run_mysql "DROP DATABASE IF EXISTS $DB_NAME;"
 log "  -> Dropping old user '$DB_USER'@'localhost'..."
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'localhost';"
 
-# c. Create Database, User, and Grant Privileges
-log "  -> Creating fresh database, user, and granting privileges (using 'mysql_native_password' for PHP compatibility)..."
+# c. Create Database, User, and Grant Privileges (Robust fix for PHP compatibility)
+log "  -> Creating fresh database, user, and applying 'mysql_native_password' for PHP compatibility..."
 MYSQL_COMMANDS=$(cat <<EOF
 CREATE DATABASE $DB_NAME;
--- FIX: Explicitly set the authentication plugin for compatibility with PHP's mysqli
-CREATE USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';
+-- 1. Create user with standard syntax (works on older MariaDB/MySQL)
+CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
+-- 2. ALTER user to explicitly use 'mysql_native_password' plugin (works on newer MariaDB/MySQL for PHP compatibility)
+ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 )
 run_mysql "$MYSQL_COMMANDS"
 
-# 5. Configure DVWA (Handles #5)
+# 5. Configure DVWA & PHP Safety Settings (Crucial New Fix)
 # --------------------------------------------------------------------------------------
-log "Configuring DVWA (config.inc.php)..."
+log "Configuring DVWA and enabling required PHP vulnerability settings..."
 
-# Create config file from example
+# Find the active PHP configuration file (php.ini)
+PHP_INI_PATH=$(find_php_ini)
+if [ -z "$PHP_INI_PATH" ] || [ ! -f "$PHP_INI_PATH" ]; then
+    # Fallback path if auto-detection fails (common path for web PHP config)
+    PHP_INI_PATH=$(find /etc/php -name php.ini -path "*/apache2/*" | head -n 1)
+    if [ -z "$PHP_INI_PATH" ]; then
+        log "Warning: Could not reliably find active php.ini file. Proceeding with DVWA config only."
+    fi
+fi
+
+if [ -f "$PHP_INI_PATH" ]; then
+    log "  -> Modifying active PHP configuration file: $PHP_INI_PATH"
+    # Essential for File Inclusion RFI challenges
+    sed -i 's/allow_url_fopen = Off/allow_url_fopen = On/g' "$PHP_INI_PATH"
+    sed -i 's/allow_url_include = Off/allow_url_include = On/g' "$PHP_INI_PATH"
+    # Essential for Command Execution challenges
+    sed -i 's/safe_mode = On/safe_mode = Off/g' "$PHP_INI_PATH" 2>/dev/null || true # safe_mode is deprecated but good to fix if present
+fi
+
+# Create DVWA config file from example
 CONFIG_PATH="$DVWA_DIR/config/config.inc.php"
 if [ ! -f "$CONFIG_PATH" ]; then
     cp "$DVWA_DIR/config/config.inc.php.dist" "$CONFIG_PATH"
 fi
 
-# Update database credentials in the config file
+# Update database credentials in the DVWA config file
 sed -i "s/\$DVWA\['db_user'\] = '.*';/\$DVWA\['db_user'\] = '$DB_USER';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_password'\] = '.*';/\$DVWA\['db_password'\] = '$DB_PASS';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_database'\] = '.*';/\$DVWA\['db_database'\] = '$DB_NAME';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_server'\] = '.*';/\$DVWA\['db_server'\] = 'localhost';/g" "$CONFIG_PATH"
 
-# Set allow_url_include to 'On' for certain RCE challenges (optional but helpful for completeness)
+# Disable reCAPTCHA keys
 sed -i "s/\$DVWA\['recaptcha_public_key'\] = .*/\$DVWA\['recaptcha_public_key'\] = '';\n\$DVWA\['recaptcha_private_key'\] = '';/g" "$CONFIG_PATH"
 
 
-# 6. Permissions (Handles #5, #3)
+# 6. Permissions
 # --------------------------------------------------------------------------------------
 log "Setting proper permissions (www-data ownership)..."
 # Set www-data ownership (most common and secure for Apache)
