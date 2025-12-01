@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v2.6 (FINAL FIX: MariaDB Cross-Version Plugin Change)
+# DVWA Universal Auto Installer v2.8 (Final Hardened Version)
 # --------------------------------------------------------------------------------------
 # This script automatically installs or completely resets and reinstalls DVWA.
-# It ensures all necessary PHP modules, database users, and permissive settings are in place.
-# Compatibility: Designed for Debian/Ubuntu/Kali-based systems.
+# It ensures maximum compatibility across Linux distros, modern MariaDB versions,
+# and all necessary PHP vulnerability settings are enabled.
 #
 # USAGE: sudo bash dvwa_setup.sh
 # --------------------------------------------------------------------------------------
@@ -13,13 +13,12 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="2.6"
+INSTALLER_VERSION="2.8"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use (though not recommended for DVWA)
 DB_NAME="dvwa"
-# Note: Using generic PHP package names (e.g., php-mysql) as apt usually links to the active version.
-# Added php-curl, php-zip, php-mbstring for maximum compatibility across PHP versions.
+# Include essential PHP extensions for compatibility
 REQUIRED_PACKAGES="apache2 mariadb-server php php-mysql php-gd php-xml php-curl php-zip php-mbstring libapache2-mod-php git unzip"
 
 # --- UTILITY FUNCTIONS ---
@@ -33,7 +32,8 @@ fail_exit() {
 # Function to run MariaDB commands securely as root
 run_mysql() {
     # Attempt to connect to MariaDB as root using sudo.
-    sudo mysql -u root -e "$1"
+    # We pipe the commands to avoid complex quoting in the shell.
+    echo "$1" | sudo mysql -u root
     if [ $? -ne 0 ]; then
         fail_exit "MariaDB command failed. Check if 'mariadb-server' is installed and running."
     fi
@@ -71,7 +71,7 @@ log "Handling DVWA directory: Checking for existing installation..."
 if [ -d "$DVWA_DIR/.git" ]; then
     log "Existing DVWA repository found. Resetting and pulling latest changes to update..."
     
-    # Fix Git dubious ownership issue (Handles #4)
+    # Fix Git dubious ownership issue
     git config --global --add safe.directory "$DVWA_DIR" 2>/dev/null || true
 
     # Use reset/pull to ensure a clean, up-to-date state
@@ -79,7 +79,7 @@ if [ -d "$DVWA_DIR/.git" ]; then
     git -C "$DVWA_DIR" pull --rebase || fail_exit "Failed to update DVWA repository via Git pull."
 
 elif [ -d "$DVWA_DIR" ]; then
-    # Directory exists but is not a Git repo (old manual install, failed clone, etc.)
+    # Directory exists but is not a Git repo (incomplete clone, manual install, etc.)
     log "Existing directory found at $DVWA_DIR, but it is NOT a valid Git repo. Deleting and cloning fresh..."
     rm -rf "$DVWA_DIR" || fail_exit "Failed to delete old non-Git DVWA directory."
     git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
@@ -90,9 +90,9 @@ else
     git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
 fi
 
-# 4. MariaDB Cleanup and Setup
+# 4. MariaDB Cleanup and Setup (The Final Fix for Syntax and Compatibility)
 # --------------------------------------------------------------------------------------
-log "MariaDB Setup: Dropping old database and user, then creating fresh ones..."
+log "MariaDB Setup: Dropping old database and user, then creating fresh ones with universal syntax..."
 
 # a. Drop Database (if exists)
 log "  -> Dropping old database '$DB_NAME'..."
@@ -102,22 +102,23 @@ run_mysql "DROP DATABASE IF EXISTS $DB_NAME;"
 log "  -> Dropping old user '$DB_USER'@'localhost'..."
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'localhost';"
 
-# c. Create Database, User, and Grant Privileges (Robust fix for PHP compatibility)
-log "  -> Creating fresh database, user, and applying 'mysql_native_password' for PHP compatibility (via direct table update)..."
+# c. Create Database, User, and Grant Privileges
+log "  -> Creating fresh database, user, and applying 'mysql_native_password' for PHP compatibility..."
 MYSQL_COMMANDS=$(cat <<EOF
 CREATE DATABASE $DB_NAME;
--- 1. Create user with standard syntax
+-- 1. Create user with the most standard, unambiguous syntax.
 CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
--- 2. FORCE the use of 'mysql_native_password' plugin directly in the user table.
---    This is the most universal fix for the PHP connection errors.
+-- 2. FORCE the use of 'mysql_native_password' plugin via direct table update.
+--    This is the non-negotiable fix for PHP connection errors across modern versions.
 UPDATE mysql.user SET plugin='mysql_native_password' WHERE User='$DB_USER' AND Host='localhost';
+-- 3. Grant privileges separately, avoiding syntax conflicts with IDENTIFIED BY.
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 )
 run_mysql "$MYSQL_COMMANDS"
 
-# 5. Configure DVWA & PHP Safety Settings (Crucial New Fix)
+# 5. Configure DVWA & PHP Safety Settings
 # --------------------------------------------------------------------------------------
 log "Configuring DVWA and enabling required PHP vulnerability settings..."
 
@@ -182,7 +183,8 @@ chmod -R 777 "$PHPIDS_TMP_DIR"
 # 7. Restart Apache
 # --------------------------------------------------------------------------------------
 log "Restarting Apache to apply configuration and PHP module changes..."
-systemctl restart apache2 || true
+# Graceful restart is generally safer than a full stop/start
+systemctl reload apache2 || true
 
 # 8. Finish
 # --------------------------------------------------------------------------------------
