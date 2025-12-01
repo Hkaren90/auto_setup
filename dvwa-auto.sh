@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v2.8 (Final Hardened Version)
+# DVWA Universal Auto Installer v2.9 (Isolated SQL Fix)
 # --------------------------------------------------------------------------------------
 # This script automatically installs or completely resets and reinstalls DVWA.
-# It ensures maximum compatibility across Linux distros, modern MariaDB versions,
-# and all necessary PHP vulnerability settings are enabled.
+# It uses isolated SQL commands for maximum compatibility across different MariaDB/MySQL
+# versions, resolving the recurring syntax and view access errors.
 #
 # USAGE: sudo bash dvwa_setup.sh
 # --------------------------------------------------------------------------------------
@@ -13,7 +13,7 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="2.8"
+INSTALLER_VERSION="2.9"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use (though not recommended for DVWA)
@@ -35,7 +35,7 @@ run_mysql() {
     # We pipe the commands to avoid complex quoting in the shell.
     echo "$1" | sudo mysql -u root
     if [ $? -ne 0 ]; then
-        fail_exit "MariaDB command failed. Check if 'mariadb-server' is installed and running."
+        fail_exit "MariaDB command failed with command: $1"
     fi
 }
 
@@ -92,7 +92,7 @@ fi
 
 # 4. MariaDB Cleanup and Setup (The Final Fix for Syntax and Compatibility)
 # --------------------------------------------------------------------------------------
-log "MariaDB Setup: Dropping old database and user, then creating fresh ones with universal syntax..."
+log "MariaDB Setup: Dropping old database and user, then creating fresh ones with universal syntax (isolated commands)..."
 
 # a. Drop Database (if exists)
 log "  -> Dropping old database '$DB_NAME'..."
@@ -102,21 +102,25 @@ run_mysql "DROP DATABASE IF EXISTS $DB_NAME;"
 log "  -> Dropping old user '$DB_USER'@'localhost'..."
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'localhost';"
 
-# c. Create Database, User, and Grant Privileges
+# c. Create Database, User, and Grant Privileges - Using separate commands for robustness
 log "  -> Creating fresh database, user, and applying 'mysql_native_password' for PHP compatibility..."
-MYSQL_COMMANDS=$(cat <<EOF
-CREATE DATABASE $DB_NAME;
--- 1. Create user with the most standard, unambiguous syntax.
-CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
--- 2. FORCE the use of 'mysql_native_password' plugin via direct table update.
---    This is the non-negotiable fix for PHP connection errors across modern versions.
-UPDATE mysql.user SET plugin='mysql_native_password' WHERE User='$DB_USER' AND Host='localhost';
--- 3. Grant privileges separately, avoiding syntax conflicts with IDENTIFIED BY.
-GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
-FLUSH PRIVILEGES;
-EOF
-)
-run_mysql "$MYSQL_COMMANDS"
+
+# 1. Create database
+run_mysql "CREATE DATABASE $DB_NAME;"
+
+# 2. Create user with standard syntax
+run_mysql "CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';"
+
+# 3. Grant privileges
+run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
+
+# 4. Use ALTER USER to set the necessary plugin. This is the only official SQL way left,
+#    executed in isolation to avoid parser errors.
+run_mysql "ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';"
+
+# 5. Flush privileges to apply changes immediately
+run_mysql "FLUSH PRIVILEGES;"
+
 
 # 5. Configure DVWA & PHP Safety Settings
 # --------------------------------------------------------------------------------------
