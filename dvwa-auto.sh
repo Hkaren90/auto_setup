@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v2.5 (FINAL FIX: PHP Vulnerability Settings)
+# DVWA Universal Auto Installer v2.6 (FINAL FIX: MariaDB Cross-Version Plugin Change)
 # --------------------------------------------------------------------------------------
 # This script automatically installs or completely resets and reinstalls DVWA.
 # It ensures all necessary PHP modules, database users, and permissive settings are in place.
@@ -13,7 +13,7 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="2.5"
+INSTALLER_VERSION="2.6"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use (though not recommended for DVWA)
@@ -103,13 +103,14 @@ log "  -> Dropping old user '$DB_USER'@'localhost'..."
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'localhost';"
 
 # c. Create Database, User, and Grant Privileges (Robust fix for PHP compatibility)
-log "  -> Creating fresh database, user, and applying 'mysql_native_password' for PHP compatibility..."
+log "  -> Creating fresh database, user, and applying 'mysql_native_password' for PHP compatibility (via direct table update)..."
 MYSQL_COMMANDS=$(cat <<EOF
 CREATE DATABASE $DB_NAME;
--- 1. Create user with standard syntax (works on older MariaDB/MySQL)
+-- 1. Create user with standard syntax
 CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
--- 2. ALTER user to explicitly use 'mysql_native_password' plugin (works on newer MariaDB/MySQL for PHP compatibility)
-ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';
+-- 2. FORCE the use of 'mysql_native_password' plugin directly in the user table.
+--    This is the most universal fix for the PHP connection errors.
+UPDATE mysql.user SET plugin='mysql_native_password' WHERE User='$DB_USER' AND Host='localhost';
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
