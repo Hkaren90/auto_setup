@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v2.2 (FIXED: PHPIDS tmp folder creation)
+# DVWA Universal Auto Installer v2.3 (FIXED: MariaDB Authentication Plugin for PHP)
 # --------------------------------------------------------------------------------------
 # This script automatically installs or completely resets and reinstalls DVWA.
 # It handles existing installations, database users, permissions, and Git errors.
@@ -13,7 +13,7 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="2.2"
+INSTALLER_VERSION="2.3"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use (though not recommended for DVWA)
@@ -84,7 +84,7 @@ else
     git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
 fi
 
-# 4. MariaDB Cleanup and Setup (Handles #1, #2)
+# 4. MariaDB Cleanup and Setup (Handles #1, #2 and MySQLi Access Denied Fix)
 # --------------------------------------------------------------------------------------
 log "MariaDB Setup: Dropping old database and user, then creating fresh ones..."
 
@@ -97,10 +97,11 @@ log "  -> Dropping old user '$DB_USER'@'localhost'..."
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'localhost';"
 
 # c. Create Database, User, and Grant Privileges
-log "  -> Creating fresh database, user, and granting privileges..."
+log "  -> Creating fresh database, user, and granting privileges (using 'mysql_native_password' for PHP compatibility)..."
 MYSQL_COMMANDS=$(cat <<EOF
 CREATE DATABASE $DB_NAME;
-CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS';
+-- FIX: Explicitly set the authentication plugin for compatibility with PHP's mysqli
+CREATE USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';
 GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 EOF
