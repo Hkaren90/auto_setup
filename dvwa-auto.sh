@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v2.0
+# DVWA Universal Auto Installer v2.2 (FIXED: PHPIDS tmp folder creation)
 # --------------------------------------------------------------------------------------
 # This script automatically installs or completely resets and reinstalls DVWA.
 # It handles existing installations, database users, permissions, and Git errors.
@@ -13,7 +13,7 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="2.0"
+INSTALLER_VERSION="2.2"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use (though not recommended for DVWA)
@@ -58,25 +58,33 @@ systemctl enable mariadb || true
 systemctl start apache2 || true
 systemctl start mariadb || true
 
-# 3. DVWA Directory Cleanup & Reset (Handles #6)
+# 3. DVWA Directory Management (Update or Clone)
 # --------------------------------------------------------------------------------------
-log "Performing clean slate setup: Cleaning up old DVWA directory..."
-if [ -d "$DVWA_DIR" ]; then
-    log "Existing DVWA directory found at $DVWA_DIR. Deleting to ensure fresh clone..."
-    rm -rf "$DVWA_DIR" || fail_exit "Failed to delete old DVWA directory."
+log "Handling DVWA directory: Checking for existing installation..."
+
+if [ -d "$DVWA_DIR/.git" ]; then
+    log "Existing DVWA repository found. Resetting and pulling latest changes to update..."
+    
+    # Fix Git dubious ownership issue (Handles #4) - Must be run before git operations
+    git config --global --add safe.directory "$DVWA_DIR" 2>/dev/null || true
+
+    # Use reset/pull to ensure a clean, up-to-date state
+    git -C "$DVWA_DIR" reset --hard || log "Warning: Git hard reset failed, proceeding with pull..."
+    git -C "$DVWA_DIR" pull --rebase || fail_exit "Failed to update DVWA repository via Git pull."
+
+elif [ -d "$DVWA_DIR" ]; then
+    # Directory exists but is not a Git repo (old manual install, failed clone, etc.)
+    log "Existing directory found at $DVWA_DIR, but it is NOT a valid Git repo. Deleting and cloning fresh..."
+    rm -rf "$DVWA_DIR" || fail_exit "Failed to delete old non-Git DVWA directory."
+    git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
+    
+else
+    # Directory does not exist, perform fresh clone
+    log "DVWA directory not found. Cloning fresh DVWA repository..."
+    git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
 fi
 
-# 4. Git Clone (Handles #4)
-# --------------------------------------------------------------------------------------
-log "Cloning fresh DVWA repository..."
-git clone https://github.com/digininja/DVWA.git "$DVWA_DIR" || fail_exit "Failed to clone DVWA repository."
-
-# Fix Git dubious ownership issue (Handles #4)
-# This prevents errors if /var/www/html is mounted from an external filesystem or owned by root.
-log "Fixing Git 'dubious ownership' for the repository..."
-git config --global --add safe.directory "$DVWA_DIR" 2>/dev/null || true
-
-# 5. MariaDB Cleanup and Setup (Handles #1, #2)
+# 4. MariaDB Cleanup and Setup (Handles #1, #2)
 # --------------------------------------------------------------------------------------
 log "MariaDB Setup: Dropping old database and user, then creating fresh ones..."
 
@@ -99,7 +107,7 @@ EOF
 )
 run_mysql "$MYSQL_COMMANDS"
 
-# 6. Configure DVWA (Handles #5)
+# 5. Configure DVWA (Handles #5)
 # --------------------------------------------------------------------------------------
 log "Configuring DVWA (config.inc.php)..."
 
@@ -119,7 +127,7 @@ sed -i "s/\$DVWA\['db_server'\] = '.*';/\$DVWA\['db_server'\] = 'localhost';/g" 
 sed -i "s/\$DVWA\['recaptcha_public_key'\] = .*/\$DVWA\['recaptcha_public_key'\] = '';\n\$DVWA\['recaptcha_private_key'\] = '';/g" "$CONFIG_PATH"
 
 
-# 7. Permissions (Handles #5, #3)
+# 6. Permissions (Handles #5, #3)
 # --------------------------------------------------------------------------------------
 log "Setting proper permissions (www-data ownership)..."
 # Set www-data ownership (most common and secure for Apache)
@@ -129,17 +137,25 @@ chown -R www-data:www-data "$DVWA_DIR" || fail_exit "Failed to set www-data owne
 find "$DVWA_DIR" -type d -exec chmod 755 {} \;
 find "$DVWA_DIR" -type f -exec chmod 644 {} \;
 
+# --- FIX: Create the PHPIDS temp directory before setting permissions ---
+PHPIDS_TMP_DIR="$DVWA_DIR/external/phpids/0.6/lib/IDS/tmp"
+if [ ! -d "$PHPIDS_TMP_DIR" ]; then
+    log "  -> Creating missing PHPIDS temporary directory: $PHPIDS_TMP_DIR"
+    mkdir -p "$PHPIDS_TMP_DIR" || fail_exit "Failed to create PHPIDS tmp directory."
+fi
+# --- END FIX ---
+
 # Set permissive permissions for the uploads and PHPIDS folder (required for DVWA functions)
 chmod -R 777 "$DVWA_DIR/hackable/uploads"
-chmod -R 777 "$DVWA_DIR/external/phpids/0.6/lib/IDS/tmp"
+chmod -R 777 "$PHPIDS_TMP_DIR"
 
 
-# 8. Restart Apache
+# 7. Restart Apache
 # --------------------------------------------------------------------------------------
 log "Restarting Apache to apply configuration and PHP module changes..."
 systemctl restart apache2 || true
 
-# 9. Finish
+# 8. Finish
 # --------------------------------------------------------------------------------------
 log "DVWA installation/reset complete! (Version $INSTALLER_VERSION)"
 echo "========================================================================================="
