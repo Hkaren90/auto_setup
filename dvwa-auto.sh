@@ -1,14 +1,11 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v3.3 (Authentication Fix: 127.0.0.1 Grant)
+# DVWA Universal Auto Installer v3.4 (Final Authentication Fix: Focus on 'localhost')
 # --------------------------------------------------------------------------------------
-# This script performs a "Scorched Earth" installation:
-# 1. DELETE existing DVWA folder completely.
-# 2. DROP existing database and user.
-# 3. Install fresh with ROBUST authentication fixes, granting access to both 
-#    'localhost' and '127.0.0.1' for universal PHP compatibility.
-# 4. VERIFY the database connection before finishing.
+# This script performs a "Scorched Earth" installation, focusing the critical 
+# authentication plugin fix specifically on the 'localhost' user, which PHP often 
+# defaults to using via Unix socket, even when configured for 127.0.0.1.
 #
 # USAGE: sudo bash dvwa_setup.sh
 # --------------------------------------------------------------------------------------
@@ -16,7 +13,7 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="3.3"
+INSTALLER_VERSION="3.4"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use
@@ -92,7 +89,7 @@ log "MariaDB Setup: Dropping old database/user and creating fresh..."
 # a. Drop Database (if exists)
 run_mysql "DROP DATABASE IF EXISTS $DB_NAME;"
 
-# b. Drop Users (for both localhost and 127.0.0.1)
+# b. Drop Users (for both localhost and 127.0.0.1 for complete cleanup)
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'localhost';"
 run_mysql "DROP USER IF EXISTS '$DB_USER'@'$DB_HOST';"
 
@@ -110,17 +107,18 @@ run_mysql "CREATE USER '$DB_USER'@'$DB_HOST' IDENTIFIED BY '$DB_PASS';"
 run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
 run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'$DB_HOST';"
 
-# 4. PLUGIN FIX (Critical for "Access Denied" errors)
-#    We only need to fix one user, as the grants are shared. We use the 127.0.0.1 grant.
-log "  -> Fixing Authentication Plugin for TCP connection (Attempting methods for compatibility)..."
+# 4. PLUGIN FIX (CRITICAL for "Access Denied" errors)
+#    We focus the fix on the 'localhost' user as this is where PHP is failing via socket.
+log "  -> Fixing Authentication Plugin for 'localhost' (Attempting methods for compatibility)..."
 
-if echo "ALTER USER '$DB_USER'@'$DB_HOST' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';" | sudo mysql -u root 2>/dev/null; then
-    log "     (Method 1 [ALTER USER] Success: Native password plugin set for $DB_HOST.)"
+# Method 1 (Modern ALTER USER) - Focused on 'localhost'
+if echo "ALTER USER '$DB_USER'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASS';" | sudo mysql -u root 2>/dev/null; then
+    log "     (Method 1 [ALTER USER] Success: Native password plugin set for localhost.)"
 else
-    log "     (Method 1 failed. Trying Method 2 [SET PASSWORD]...)"
-    # Fallback for older MariaDB versions or specific configurations
-    if echo "SET PASSWORD FOR '$DB_USER'@'$DB_HOST' = PASSWORD('$DB_PASS');" | sudo mysql -u root 2>/dev/null; then
-        log "     (Method 2 [SET PASSWORD] Success: Password set for $DB_HOST.)"
+    log "     (Method 1 failed. Trying Method 2 [SET PASSWORD] for 'localhost'...)"
+    # Method 2 (Legacy SET PASSWORD) - Focused on 'localhost'
+    if echo "SET PASSWORD FOR '$DB_USER'@'localhost' = PASSWORD('$DB_PASS');" | sudo mysql -u root 2>/dev/null; then
+        log "     (Method 2 [SET PASSWORD] Success: Password set for localhost.)"
     else
          warn "     (Both plugin fix methods failed. Connection might still fail.)"
     fi
