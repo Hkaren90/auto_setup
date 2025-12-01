@@ -1,11 +1,12 @@
 #!/bin/bash
 #
 # --------------------------------------------------------------------------------------
-# DVWA Universal Auto Installer v3.5 (Final Authentication Fix: Clean ALTER USER)
+# DVWA Universal Auto Installer v3.6 (CRITICAL Fix: Forcing TCP/IP via Port Number)
 # --------------------------------------------------------------------------------------
-# This script performs a "Scorched Earth" installation, using the cleanest, most 
-# reliable ALTER USER syntax to force the 'mysql_native_password' plugin for 
-# the 'localhost' user, resolving the persistent Unix socket connection failure.
+# This script performs a "Scorched Earth" installation. The key fix is explicitly 
+# defining the database port (3306) in all configurations and tests, which forces 
+# PHP to skip the problematic Unix socket connection (which causes the 'localhost' 
+# Access Denied error) and use reliable TCP/IP.
 #
 # USAGE: sudo bash dvwa_setup.sh
 # --------------------------------------------------------------------------------------
@@ -13,12 +14,13 @@
 set -e
 
 # --- CONFIGURATION ---
-INSTALLER_VERSION="3.5"
+INSTALLER_VERSION="3.6"
 DVWA_DIR="/var/www/html/dvwa"
 DB_USER="dvwa"
 DB_PASS="password" # Change this password for production use
 DB_NAME="dvWA"
-DB_HOST="127.0.0.1" # Explicitly use 127.0.0.1 for consistent TCP connections
+DB_HOST="127.0.0.1"
+DB_PORT="3306" # Explicitly use port 3306 to force TCP/IP and bypass Unix sockets
 # Include essential PHP extensions for compatibility
 REQUIRED_PACKAGES="apache2 mariadb-server php php-mysql php-gd php-xml php-curl php-zip php-mbstring libapache2-mod-php git unzip"
 
@@ -107,7 +109,7 @@ run_mysql "CREATE USER '$DB_USER'@'$DB_HOST' IDENTIFIED BY '$DB_PASS';"
 run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';"
 run_mysql "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'$DB_HOST';"
 
-# 4. PLUGIN FIX (CRITICAL for "Access Denied" errors)
+# 4. PLUGIN FIX (CRITICAL for "Access Denied" errors on socket connection)
 #    We focus the fix on the 'localhost' user, using two different ALTER USER syntaxes
 log "  -> Fixing Authentication Plugin for 'localhost' (Attempting two ALTER USER methods)..."
 
@@ -164,8 +166,8 @@ fi
 sed -i "s/\$DVWA\['db_user'\] = '.*';/\$DVWA\['db_user'\] = '$DB_USER';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_password'\] = '.*';/\$DVWA\['db_password'\] = '$DB_PASS';/g" "$CONFIG_PATH"
 sed -i "s/\$DVWA\['db_database'\] = '.*';/\$DVWA\['db_database'\] = '$DB_NAME';/g" "$CONFIG_PATH"
-# FIX: Use 127.0.0.1 explicitly to force TCP/IP (though PHP may still use socket)
-sed -i "s/\$DVWA\['db_server'\] = '.*';/\$DVWA\['db_server'\] = '$DB_HOST';/g" "$CONFIG_PATH"
+# FIX: Use 127.0.0.1:3306 explicitly to force TCP/IP connection
+sed -i "s/\$DVWA\['db_server'\] = '.*';/\$DVWA\['db_server'\] = '$DB_HOST:$DB_PORT';/g" "$CONFIG_PATH"
 
 # Disable reCAPTCHA keys
 sed -i "s/\$DVWA\['recaptcha_public_key'\] = .*/\$DVWA\['recaptcha_public_key'\] = '';\n\$DVWA\['recaptcha_private_key'\] = '';/g" "$CONFIG_PATH"
@@ -200,10 +202,10 @@ systemctl reload apache2 || true
 # 8. VERIFICATION 
 # --------------------------------------------------------------------------------------
 log "Verifying Database Connection..."
-# Test connection explicitly using 127.0.0.1
+# Test connection explicitly using 127.0.0.1 and port 3306 to force TCP
 TEST_PHP=$(cat <<EOF
 <?php
-\$conn = @new mysqli('$DB_HOST', '$DB_USER', '$DB_PASS', '$DB_NAME');
+\$conn = @new mysqli('$DB_HOST', '$DB_USER', '$DB_PASS', '$DB_NAME', $DB_PORT);
 if (\$conn->connect_error) {
     fwrite(STDERR, "DB Connection Failed: " . \$conn->connect_error);
     exit(1);
