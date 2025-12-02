@@ -16,9 +16,9 @@ log(){ echo "[+] $1"; }
 log "Starting DVWA Full Reset & Fresh Install (v$INSTALLER_VERSION)..."
 
 # ---------------- System Update ----------------
-log "Updating system & installing required packages..."
-apt update -y
-apt install -y apache2 mariadb-server php php-mysql php-gd php-xml php-curl php-zip libapache2-mod-php git unzip
+#log "Updating system & installing required packages..."
+#apt update -y
+#apt install -y apache2 mariadb-server php php-mysql php-gd php-xml php-curl php-zip libapache2-mod-php git unzip
 
 # ---------------- Enable Services --------------
 systemctl enable apache2 || true
